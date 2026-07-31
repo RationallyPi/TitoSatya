@@ -2,3 +2,7 @@
 # Virtual machine
 
 venv/
+Papers/
+selenium_profile/
+chrome_downloads
+Parsed_Markdown/
