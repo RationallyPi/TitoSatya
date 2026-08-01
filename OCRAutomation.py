@@ -183,22 +183,31 @@ def wait_for_download_link(previous_href=None, poll_interval=3, log_every=30):
 
         time.sleep(poll_interval)
 
+
+
+
 # ---------- MAIN ----------
 def main():
     driver.get(modelURL)
     time.sleep(30)
 
     files = sorted(INPUT_FOLDER.glob("*"))
-    if not files:
-        print(f"No files found in {INPUT_FOLDER.resolve()}")
+
+
+    #Implement mechanism to iterate through every Date folder.  (Not tested yet)
+    date_folders = [f for f in INPUT_FOLDER.iterdir() if f.is_dir()]
+    if not date_folders:
+        print(f"No date folders found in {INPUT_FOLDER.resolve()}")
         return
 
     switch_into_gradio_iframe()
 
     previous_href = None
 
-    for i, filepath in enumerate(files):
-        print(f"[{i+1}/{len(files)}] Processing {filepath.name}")
+    for date_folder in date_folders:
+        files = sorted(date_folder.glob("*"))
+        for i, filepath in enumerate(files):
+            print(f"[{i+1}/{len(files)}] Processing {filepath.name}")
 
         upload_file(filepath)
         click_parse_button()
