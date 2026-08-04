@@ -1,6 +1,7 @@
-from pathlib import Path
+import json
 import time
 import shutil
+from pathlib import Path
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -13,6 +14,7 @@ modelURL = "https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.5"
 INPUT_FOLDER = Path("Papers")
 OUTPUT_FOLDER = Path("Parsed_Markdown")
 DOWNLOAD_DIR = Path("chrome_downloads").resolve()
+CHECKPOINT_FILE = Path("checkpoint.json")
 
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 DOWNLOAD_DIR.mkdir(exist_ok=True)
@@ -35,6 +37,29 @@ driver = uc.Chrome(options=options, version_main=CHROME_VERSION)
 wait = WebDriverWait(driver, 30)
 
 
+# ---------- CHECKPOINT HELPERS ----------
+def load_checkpoint():
+    """Returns {'date_folder': str, 'file': str} of the last successfully
+    processed file, or None if no checkpoint exists yet."""
+    if CHECKPOINT_FILE.exists():
+        try:
+            data = json.loads(CHECKPOINT_FILE.read_text())
+            print(f">>> Resuming after checkpoint: {data}")
+            return data
+        except (json.JSONDecodeError, KeyError):
+            print(">>> Checkpoint file corrupted, ignoring.")
+            return None
+    return None
+
+
+def save_checkpoint(date_folder_name: str, filename: str):
+    CHECKPOINT_FILE.write_text(json.dumps({
+        "date_folder": date_folder_name,
+        "file": filename
+    }))
+
+
+# ---------- GRADIO HELPERS ----------
 def switch_into_gradio_iframe():
     driver.switch_to.default_content()
     iframe = wait.until(
@@ -53,7 +78,7 @@ def upload_file(filepath: Path):
         arguments[0].style.visibility = 'visible';
     """, file_input)
     file_input.send_keys(str(filepath.resolve()))
-    time.sleep(10)
+    time.sleep(20)
 
 
 def click_parse_button():
@@ -63,81 +88,6 @@ def click_parse_button():
     parse_button.click()
 
 
-def wait_for_download_link(poll_interval=3, log_every=30):
-    start = time.time()
-    last_log = start
-    was_spinning = True
-    tab_opened = False
-
-    while True:
-        comp30 = driver.find_elements(By.ID, "component-30")
-        if comp30:
-            link_matches = driver.find_elements(By.CSS_SELECTOR, DOWNLOAD_LINK_SELECTOR)
-            if link_matches:
-                elapsed = time.time() - start
-                print(f"Download link appeared after {elapsed:.1f}s")
-                return link_matches[0]
-
-        spinning = len(driver.find_elements(
-            By.CSS_SELECTOR, ".generating, .pending, [data-testid='loading-status']"
-        )) > 0
-
-        if was_spinning and not spinning and not tab_opened:
-            print(">>> Spinner just disappeared — opening Markdown Source tab")
-            comp29 = driver.find_elements(By.ID, "component-29-button")
-            if comp29:
-                comp29[0].click()
-                tab_opened = True
-                time.sleep(1)
-
-        was_spinning = spinning
-
-        now = time.time()
-        if now - last_log >= log_every:
-            print(f"Still waiting... ({now - start:.0f}s elapsed, spinner_visible={spinning})")
-            last_log = now
-
-        time.sleep(poll_interval)
-
-
-def get_newest_file_in(folder: Path, before_time: float, timeout=60) -> Path:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        candidates = [
-            f for f in folder.iterdir()
-            if f.stat().st_mtime > before_time and not f.name.endswith(".crdownload")
-        ]
-        if candidates:
-            return max(candidates, key=lambda f: f.stat().st_mtime)
-        time.sleep(0.5)
-    raise TimeoutError("Download did not complete in time")
-
-
-def download_and_save(download_link, original_filename: str):
-    before_time = time.time()
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", download_link)
-    download_link.click()
-
-    downloaded_file = get_newest_file_in(DOWNLOAD_DIR, before_time)
-
-    target_name = Path(original_filename).stem + ".txt"
-    target_path = OUTPUT_FOLDER / target_name
-    shutil.move(str(downloaded_file), str(target_path))
-    print(f"Saved: {target_path}")
-
-
-def clear_upload():
-    """
-    Clicks the 'Clear' (X) button on the Upload Image component to
-    remove the current file, resetting it for the next upload —
-    no page reload needed.
-    """
-    clear_button = wait.until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, CLEAR_BUTTON_SELECTOR))
-    )
-    clear_button.click()
-    print("Cleared upload component for next file")
-    time.sleep(5)  # small buffer for the UI to reset
 def get_current_download_href():
     """Returns the current download link's href, or None if it doesn't exist."""
     link = driver.find_elements(By.CSS_SELECTOR, DOWNLOAD_LINK_SELECTOR)
@@ -184,6 +134,44 @@ def wait_for_download_link(previous_href=None, poll_interval=3, log_every=30):
         time.sleep(poll_interval)
 
 
+def get_newest_file_in(folder: Path, before_time: float, timeout=60) -> Path:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        candidates = [
+            f for f in folder.iterdir()
+            if f.stat().st_mtime > before_time and not f.name.endswith(".crdownload")
+        ]
+        if candidates:
+            return max(candidates, key=lambda f: f.stat().st_mtime)
+        time.sleep(0.5)
+    raise TimeoutError("Download did not complete in time")
+
+
+def download_and_save(download_link, original_filename: str, output_subfolder: Path):
+    before_time = time.time()
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", download_link)
+    download_link.click()
+
+    downloaded_file = get_newest_file_in(DOWNLOAD_DIR, before_time)
+
+    target_name = Path(original_filename).stem + ".txt"
+    target_path = output_subfolder / target_name
+    shutil.move(str(downloaded_file), str(target_path))
+    print(f"Saved: {target_path}")
+
+
+def clear_upload():
+    """
+    Clicks the 'Clear' (X) button on the Upload Image component to
+    remove the current file, resetting it for the next upload —
+    no page reload needed.
+    """
+    clear_button = wait.until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, CLEAR_BUTTON_SELECTOR))
+    )
+    clear_button.click()
+    print("Cleared upload component for next file")
+    time.sleep(5)  # small buffer for the UI to reset
 
 
 # ---------- MAIN ----------
@@ -191,11 +179,7 @@ def main():
     driver.get(modelURL)
     time.sleep(30)
 
-    files = sorted(INPUT_FOLDER.glob("*"))
-
-
-    #Implement mechanism to iterate through every Date folder.  (Not tested yet)
-    date_folders = [f for f in INPUT_FOLDER.iterdir() if f.is_dir()]
+    date_folders = sorted(f for f in INPUT_FOLDER.iterdir() if f.is_dir())
     if not date_folders:
         print(f"No date folders found in {INPUT_FOLDER.resolve()}")
         return
@@ -203,24 +187,49 @@ def main():
     switch_into_gradio_iframe()
 
     previous_href = None
+    checkpoint = load_checkpoint()
+    resuming = checkpoint is not None  # flips off once we pass the checkpoint
 
     for date_folder in date_folders:
         files = sorted(date_folder.glob("*"))
+
+        # mirror the date folder name under Parsed_Markdown
+        output_subfolder = OUTPUT_FOLDER / date_folder.name
+        output_subfolder.mkdir(parents=True, exist_ok=True)
+
         for i, filepath in enumerate(files):
-            print(f"[{i+1}/{len(files)}] Processing {filepath.name}")
+            target_path = output_subfolder / (filepath.stem + ".txt")
 
-        upload_file(filepath)
-        click_parse_button()
+            # --- resume logic: skip everything up to and including checkpoint ---
+            if resuming:
+                if date_folder.name == checkpoint["date_folder"] and filepath.name == checkpoint["file"]:
+                    print(f"Reached checkpoint at {filepath.name}, resuming from next file.")
+                    resuming = False
+                else:
+                    print(f"Skipping (before checkpoint): {date_folder.name}/{filepath.name}")
+                continue
 
-        download_link = wait_for_download_link(previous_href=previous_href)
-        download_and_save(download_link, filepath.name)
+            # --- skip if output already exists (belt-and-suspenders) ---
+            if target_path.exists():
+                print(f"Already parsed, skipping: {target_path}")
+                continue
 
-        previous_href = download_link.get_attribute("href")
+            print(f"[{i+1}/{len(files)}] Processing {date_folder.name}/{filepath.name}")
 
-        if i < len(files) - 1:
-            clear_upload()
+            upload_file(filepath)
+            click_parse_button()
 
-    driver.switch_to.default_content()
+            download_link = wait_for_download_link(previous_href=previous_href)
+            download_and_save(download_link, filepath.name, output_subfolder)
+
+            previous_href = download_link.get_attribute("href")
+            save_checkpoint(date_folder.name, filepath.name)
+
+            if i < len(files) - 1:
+                clear_upload()
+
+        print("Finished processing all files in folder:", date_folder.name)
+        driver.switch_to.default_content()
 
 
 if __name__ == "__main__":

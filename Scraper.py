@@ -9,8 +9,12 @@ from selenium.webdriver.common.by import By
 # -----------------------------
 # CONFIG
 # -----------------------------
-START_DATE = "2026-07-09"
-END_DATE = "2026-07-10"
+START_DATE = "2026-03-27"
+END_DATE = "2026-07-05"
+
+
+#START_DATE = "2024-07-15"
+#END_DATE = "2024-09-23"
 
 BASE_URL = "https://epaper.ekantipur.com/kathmandupost/"
 BASE_DOMAIN = "https://epaper.ekantipur.com"
@@ -25,7 +29,7 @@ profile = Path("selenium_profile").resolve()
 options = uc.ChromeOptions()
 options.add_argument(f"--user-data-dir={profile}")
 
-driver = uc.Chrome(options=options)
+driver = uc.Chrome(options=options, version_main=150)
 
 # -----------------------------
 # COPY COOKIES TO REQUESTS

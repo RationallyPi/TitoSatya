@@ -1,6 +1,6 @@
 
 # Virtual machine
-
+.env
 venv/
 Papers/
 selenium_profile/
